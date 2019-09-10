@@ -1,0 +1,199 @@
+<?php
+/**
+ * @file
+ * Este servicio traera la info de empleados desde un servicio api
+ * Johanna Bulla
+ */
+
+
+/**
+ * Implements hook_install().
+ */
+function servicios_rest_install() {
+  	
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	
+	# Se crea la taxonomia para almacenar los tipos de salario
+	$taxonomia = (object) array(
+		'name' => 'Tipo salario',
+		'description' => 'Vocabulario para almacenar los tipos de salario',
+		'machine_name' => 'tipo_salario',
+	);
+	#Crea la taxonomia
+	taxonomy_vocabulary_save($taxonomia);
+
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+
+
+	#Obtiene la información de la taxonomia
+	$taxonomia = taxonomy_vocabulary_machine_name_load('tipo_salario');
+
+	#Se definen los tipos de salario que va a tener la taxonomia
+	$terminos=array('Salario bajo'
+		           ,'Salario medio'
+		           ,'Salario alto');
+	#Recorre cada termino para crearlo a la taxonomia
+	foreach ($terminos as $key => $value) {
+		$termino = (object) array(
+			'name' => $value,
+			'description' => 'Termino que se usa para clasificar un salario',
+			'vid' => $taxonomia->vid,
+		);
+
+		#Crea el termino en la taxonomia	
+		taxonomy_term_save($termino);
+	}
+
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+
+	# Define la estructura para el tipo de contenido empleados
+	$nodo = array(
+		'type' => 'empleados',
+		'name' => 'Empleados',
+		'base' => 'node_content',
+		'description' => 'Nodos de empleados cargados desde Rest',
+		'body_label' => 'Nodos de empleados cargados desde Rest'
+	);
+
+	$nodo = node_type_set_defaults($nodo);
+	node_add_body_field($nodo);
+
+	#Crea el tipo de contenido empelados
+	node_type_save($nodo);
+	
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+
+	#Define los campos que va a tener el tipo de contenido
+	$campos = array(
+		
+		'field_empleados_nombre' => array(
+			'field_name' => 'field_empleados_nombre',
+    		'type' => 'text',
+    		'label' => 'Nombre del empleado',
+		),
+		'field_empleados_edad' => array(
+			'field_name' => 'field_empleados_edad',
+    		'type' => 'text',
+    		'label' => 'Edad',
+		),
+		'field_empleados_id_remoto' => array(
+			'field_name' => 'field_empleados_id_remoto',
+    		'type' => 'text',
+    		'label' => 'Id Remoto',
+		),
+		'field_empleados_tipo_salario' => array(
+			'field_name' => 'field_empleados_tipo_salario',
+			'type' => 'taxonomy_term_reference',
+			'label' => 'Tipo de salario',
+			'settings' => array(
+				'allowed_values' => array(
+					array(
+						'vocabulary' => 'tipo_salario',
+						'parent' => 0
+					)
+				)
+			)
+		)
+	);
+
+	#Crea cada uno de los campos definidos
+	foreach ($campos as $key => $campo) {
+		field_create_field($campo);
+	}
+
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+
+	// Define la instancia de los campos
+	$instancias = array(
+		
+		'field_empleados_nombre' => array(
+			'field_name' => 'field_empleados_nombre',
+			'entity_type' => 'node',
+			'bundle' => 'empleados',
+			'label' => 'Nombre del empleado',
+			'description' => '',
+			'required' => TRUE,	
+		),
+		'field_empleados_edad' => array(
+			'field_name' => 'field_empleados_edad',
+			'entity_type' => 'node',
+			'bundle' => 'empleados',
+			'label' => 'Edad',
+			'description' => '',
+			'required' => TRUE,	
+		),
+		'field_empleados_id_remoto' => array(
+			'field_name' => 'field_empleados_id_remoto',
+			'entity_type' => 'node',
+			'bundle' => 'empleados',
+			'label' => 'Id Remoto',
+			'description' => 'Id del Empleado en el API',
+			'required' => TRUE,	
+		),
+		'field_empleados_tipo_salario'=>array(
+			'field_name' => 'field_empleados_tipo_salario',
+			'entity_type' => 'node',
+			'bundle' => 'empleados',
+			'label' => 'Tipo de salario',
+			'description' => '',
+			'required' => TRUE,
+			'widget' => array(
+				'type' => 'options_select',
+				'weight' => 1,
+			)
+		)
+	);	
+	#Crea las instanacias de cada campo
+	foreach ($instancias as $key => $instancia) {
+		field_create_instance($instancia);
+	}
+
+}
+
+
+/**
+ * Implements hook_uninstall().
+ */
+function servicios_rest_uninstall() {
+
+	#Consulta todos los nodos del tipo de contenido empleados
+	$sql = 'SELECT nid FROM {node} n WHERE n.type = :type';
+	$result = db_query($sql, array(':type' => 'empleados'));
+	$nids = array();
+	foreach ($result as $row) {
+		$nids[] = $row->nid;
+	}
+	#Elimina los nodos del tipo de contenido
+	node_delete_multiple($nids);
+	
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+		
+	$fields_info = field_info_instances('node', 'empleados');
+	foreach ($fields_info as $key => $value) {
+		#Elimina los campos del tipo de contenido
+		field_delete_field($key);
+	}	
+	#Elimina el tipo de contenido
+	node_type_delete('empleados');
+
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------------------
+
+	#Elimina el vocabulario y sus terminos
+	$vocab = taxonomy_vocabulary_machine_name_load('tipo_salario');
+	taxonomy_vocabulary_delete($vocab->vid);
+
+}

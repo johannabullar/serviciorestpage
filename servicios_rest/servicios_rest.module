@@ -1,0 +1,277 @@
+<?php
+/**
+ * @file
+ * Este servicio traera la info de empleados desde un servicio api
+ * Johanna Bulla
+ */
+
+/**
+ * Implements hook_menu(). 
+ */
+function servicios_rest_menu() {     
+   
+  $items['admin/config/system/servicios_rest'] = array(
+    'title' => 'Configurar Servicio Rest',
+    'description' => 'Configuración del servicio Rest',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('servicios_rest_administracion'),
+    'access arguments' => array('access administration pages'),    
+    'type' => MENU_NORMAL_ITEM,   
+  );
+
+  $items['admin/config/system/servicios_rest_importar'] = array(
+    'title' => 'Importar Empleados Servicio Rest',
+    'description' => 'Realiza el proceso de importación desde el Rest API',
+    'page callback' => array('servicios_rest_importar'),
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM,
+  );		 	  	  
+
+  return $items;
+}
+
+
+/**
+ * @file
+ * Formulario de configuración para el servicio rest
+ */ 
+function servicios_rest_administracion() {
+
+  $form['servicios_rest_url'] = array(
+    '#type' => 'textfield',
+    '#title' => 'Dirección del Servicio Rest',
+    '#default_value' => variable_get('servicios_rest_url', "http://dummy.restapiexample.com/api/v1/employees"),
+    '#description' => 'Asigne aqui la dirección url del servicio Rest a utilizar',
+    '#required' => TRUE,
+    );  
+   
+  return system_settings_form($form);
+}
+
+
+/**
+ * Inicia el proceso de importación desde el Rest API
+ */
+function servicios_rest_importar() {
+  $batch = array(
+    'operations' => array(),
+    'finished' => 'servicios_rest_finalizar',
+    'title' => 'Importar empleados',
+    'init_message' => 'El proceso de importación se ha iniciado',
+    'progress_message' => 'Procesados @current de @total.',
+    'error_message' => 'Se ha encontrado un error en la importación.',   
+  );
+
+  $url=variable_get('servicios_rest_url');
+  if(trim($url)==""){
+     drupal_set_message("No se pudo cargar el recurso, la dirección no es correcta",'error');
+  }else{   
+    #Se obtiene los datos desde el Rest API, y se procede a cargar uno a uno al proceso en Batch
+    $json = file_get_contents($url);
+    $datos = json_decode($json);  
+          
+    foreach ($datos as $dato) {
+        $batch['operations'][] = array('servicios_rest_importar_cargue', array($dato));        
+    }
+   }    
+
+  batch_set($batch);
+  batch_process('listado_empleados');
+}
+
+/**
+ * Carga un registro de Rest API al tipo de contenido empleados
+ */
+function servicios_rest_importar_cargue($dato, &$context) {
+ global $user;
+ //Consulta si el id del empleado que viene del rest, existe en algun nodo de tipo empleado
+ $result=db_query("  SELECT n.nid as nid
+            FROM node n
+            INNER JOIN field_data_field_empleados_id_remoto a ON n.nid=a.entity_id and a.bundle='empleados' 
+                               AND a.field_empleados_id_remoto_value=".$dato->id."
+            WHERE n.type='empleados'
+            AND n.status=1
+            ORDER BY n.changed desc");
+   $i=0;
+   $data=array();
+    foreach ($result as $record) {                              
+      $data[$i]['nid']=$record->nid;  
+    $i++;
+   }
+
+  if(count($data)==0){ //Si no encontro el empleado lo crea
+    #Inserta un nuevo node de tipo empleado
+    $node = new stdClass();
+    $node->title = "Registro ".$dato->id."";
+    $node->type = "empleados";
+    
+    node_object_prepare($node); 
+    
+    $node->language = LANGUAGE_NONE; 
+    $node->uid = $user->uid;
+    $node->status = 1; 
+    $node->promote = 0;
+    $node->comment = 1;
+    $node->field_empleados_nombre[$node->language][]['value'] = $dato->employee_name;
+    $node->field_empleados_edad[$node->language][]['value'] = $dato->employee_age;
+    $node->field_empleados_id_remoto[$node->language][]['value'] = $dato->id;
+
+    $id=servicios_rest_tipo_salario($dato->employee_salary);
+    $node->field_empleados_tipo_salario[$node->language][]['tid'] = $id;
+    $node = node_submit($node);
+    node_save($node);
+     
+  }else{
+    #Actualiza el nodo del empleado
+    $node = node_load ($nid);
+    $node->field_empleados_nombre[$node->language][]['value'] = $info->employee_name;
+    $node->field_empleados_edad[$node->language][]['value'] = $info->employee_age;
+    $node->field_empleados_id_remoto[$node->language][]['value'] = $info->id;
+
+    $id=servicios_rest_tipo_salario($dato->employee_salary);
+    $node->field_empleados_tipo_salario[$node->language][]['tid'] = $id;
+    node_save($node);
+  }        
+  
+}
+
+/**
+ * Se ejecuta al finalizar la importación
+ */
+function servicios_rest_finalizar($success, $results, $operations) {
+  if ($success) {
+    drupal_set_message('La importación se ha finalizado');
+  }
+  else {
+    $error_operation = reset($operations);
+    $message ="Ocurrio un error mientras se estaba procesando ".$error_operation[0]." con los parametros ".print_r($error_operation[1], TRUE)."";
+    drupal_set_message($message, 'error');
+  }
+}
+
+
+/**
+ * Obtiene el id del termino del tipo de salario que tiene el empleado
+ */
+function servicios_rest_tipo_salario($salario) {
+  $terminos=array('Salario bajo',
+                  'Salario medio',
+                  'Salario alto');
+  $termino="";
+  if($salario>=0&& $salario<=1000){ $termino=$terminos[0];}
+  if($salario>1000&& $salario<=4000){ $termino=$terminos[1]; }
+  if($salario > 4000){ $termino=$terminos[2]; }
+
+   $id=0; 
+   if ($taxonomia = taxonomy_vocabulary_machine_name_load('tipo_salario')) {
+    $tree = taxonomy_get_tree($taxonomia->vid);
+    foreach ($tree as $term) {
+      if ($term->name == $termino) {
+          $id=$term->tid;
+      }
+    }
+  }
+
+  return $id;
+}
+
+
+/**
+* Implementation of hook_views_api().
+*/
+function servicios_rest_views_api() {
+  return array(
+    'api' => 3.0,
+    'path' => drupal_get_path('module', 'servicios_rest')
+  );
+}
+
+/**
+ * Implementation of hook_views_default_views().
+ */
+function servicios_rest_views_default_views() {
+ 
+  $view = new view();
+  $view->name = 'lista_empleados';
+  $view->description = '';
+  $view->tag = 'default';
+  $view->base_table = 'node';
+  $view->human_name = 'Listado de empleados ';
+  $view->core = 7;
+  $view->api_version = '3.0';
+  $view->disabled = FALSE; /* Edit this to true to make a default view disabled initially */
+
+  /* Display: Master */
+  $handler = $view->new_display('default', 'Master', 'default');
+  $handler->display->display_options['title'] = 'Listado de empleados';
+  $handler->display->display_options['use_more_always'] = FALSE;
+  $handler->display->display_options['access']['type'] = 'perm';
+  $handler->display->display_options['cache']['type'] = 'none';
+  $handler->display->display_options['query']['type'] = 'views_query';
+  $handler->display->display_options['exposed_form']['type'] = 'basic';
+  $handler->display->display_options['exposed_form']['options']['reset_button_label'] = 'Restablecer';
+  $handler->display->display_options['pager']['type'] = 'full';
+  $handler->display->display_options['pager']['options']['items_per_page'] = '50';
+  $handler->display->display_options['pager']['options']['tags']['first'] = '« primero';
+  $handler->display->display_options['pager']['options']['tags']['previous'] = '‹ anterior';
+  $handler->display->display_options['pager']['options']['tags']['next'] = 'siguiente ›';
+  $handler->display->display_options['pager']['options']['tags']['last'] = 'última »';
+  $handler->display->display_options['style_plugin'] = 'table';
+  /* Field: Content: Title */
+  $handler->display->display_options['fields']['title']['id'] = 'title';
+  $handler->display->display_options['fields']['title']['table'] = 'node';
+  $handler->display->display_options['fields']['title']['field'] = 'title';
+  $handler->display->display_options['fields']['title']['alter']['word_boundary'] = FALSE;
+  $handler->display->display_options['fields']['title']['alter']['ellipsis'] = FALSE;
+  /* Filter criterion: Content: Published status */
+  $handler->display->display_options['filters']['status']['id'] = 'status';
+  $handler->display->display_options['filters']['status']['table'] = 'node';
+  $handler->display->display_options['filters']['status']['field'] = 'status';
+  $handler->display->display_options['filters']['status']['value'] = 1;
+  $handler->display->display_options['filters']['status']['group'] = 1;
+  $handler->display->display_options['filters']['status']['expose']['operator'] = FALSE;
+  /* Filter criterion: Content: Type */
+  $handler->display->display_options['filters']['type']['id'] = 'type';
+  $handler->display->display_options['filters']['type']['table'] = 'node';
+  $handler->display->display_options['filters']['type']['field'] = 'type';
+  $handler->display->display_options['filters']['type']['value'] = array(
+    'empleados' => 'empleados',
+  );
+
+  /* Display: Empleados */
+  $handler = $view->new_display('page', 'Empleados', 'page');
+  $handler->display->display_options['defaults']['title'] = FALSE;
+  $handler->display->display_options['title'] = 'Listado de empleados';
+  $handler->display->display_options['defaults']['pager'] = FALSE;
+  $handler->display->display_options['pager']['type'] = 'full';
+  $handler->display->display_options['pager']['options']['items_per_page'] = '10';
+  $handler->display->display_options['pager']['options']['offset'] = '0';
+  $handler->display->display_options['pager']['options']['id'] = '0';
+  $handler->display->display_options['pager']['options']['quantity'] = '9';
+  $handler->display->display_options['pager']['options']['tags']['first'] = '« primero';
+  $handler->display->display_options['pager']['options']['tags']['previous'] = '‹ anterior';
+  $handler->display->display_options['pager']['options']['tags']['next'] = 'siguiente ›';
+  $handler->display->display_options['pager']['options']['tags']['last'] = 'última »';
+  $handler->display->display_options['defaults']['fields'] = FALSE;
+  /* Field: Content: Nombre del empleado */
+  $handler->display->display_options['fields']['field_empleados_nombre']['id'] = 'field_empleados_nombre';
+  $handler->display->display_options['fields']['field_empleados_nombre']['table'] = 'field_data_field_empleados_nombre';
+  $handler->display->display_options['fields']['field_empleados_nombre']['field'] = 'field_empleados_nombre';
+  /* Field: Content: Link to content */
+  $handler->display->display_options['fields']['view_node']['id'] = 'view_node';
+  $handler->display->display_options['fields']['view_node']['table'] = 'views_entity_node';
+  $handler->display->display_options['fields']['view_node']['field'] = 'view_node';
+  $handler->display->display_options['fields']['view_node']['label'] = '';
+  $handler->display->display_options['fields']['view_node']['element_label_colon'] = FALSE;
+  $handler->display->display_options['fields']['view_node']['text'] = 'Ver';
+  $handler->display->display_options['defaults']['sorts'] = FALSE;
+  $handler->display->display_options['path'] = 'listado_empleados';
+  $handler->display->display_options['menu']['type'] = 'normal';
+  $handler->display->display_options['menu']['title'] = 'Listado empleados';
+  $handler->display->display_options['menu']['weight'] = '0';
+  $handler->display->display_options['menu']['context'] = 0;
+  $handler->display->display_options['menu']['context_only_inline'] = 0;
+
+  $views[$view->name] = $view;
+  return $views;
+}

@@ -1,0 +1,6 @@
+name = Servicios Rest
+description = Este servicio crea un tipo de nodo custom y guarda los datos generados por medio de un servicio api
+core = 7.x
+package = Servicios
+dependencies[] = views
+dependencies[] = ctools
